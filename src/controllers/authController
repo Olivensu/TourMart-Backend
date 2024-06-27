@@ -1,0 +1,123 @@
+const createError = require('http-errors');
+const jwt = require('jsonwebtoken');
+const bcrypt = require('bcrypt');
+const mongoose = require('mongoose')
+const User = require('../models/userModel');
+const { successResponse } = require('./responceController');
+const { createJsonWebToken } = require('../helper/jsonwebtoken');
+const { activationKey, accessKey, refreshKey } = require('../secret');
+
+const handleLogin = async(req,res,next)=>{
+    try {
+        const {email, password} = req.body;
+
+        const user = await User.findOne({email})
+        if(!user){
+            throw createError(404, 'User does not exist')
+        }
+        if(user.isBanned){
+            console.log(user.isBanned)
+            throw createError(400, 'User is banned, please contact the administrator')
+        }
+        //compare password
+        const isPasswordMatch = await bcrypt.compare(password, user.password);
+        if(!isPasswordMatch){
+            throw createError(401, 'User email or passwords do not match')
+        }
+
+        
+        const accessToken = createJsonWebToken({user}, accessKey, 10 * 60 * 1000);
+
+        res.cookie('accessToken', accessToken,{
+            maxAge: 10 * 60 * 1000,
+            httpOnly: true,
+            secure: true,
+            sameSite: 'none',
+        })
+        const refreshToken = createJsonWebToken({user}, refreshKey, '7d');
+
+        res.cookie('refreshToken', refreshToken,{
+            maxAge: 7 * 24 * 60 * 60 * 1000,
+            httpOnly: true, 
+            secure: true,
+            sameSite: 'none',
+        })
+        const userWithOutPass = await User.findOne({email}).select("-password")
+        return successResponse(res, {
+            statusCode: 200,
+            message: `Logged in successful`,
+            payload: {userWithOutPass}
+        })
+        
+    } catch (error) {
+        next(error);
+    }
+}
+
+const handleLogOut = async(req,res,next)=>{
+    try {
+        res.clearCookie('accessToken')
+        res.clearCookie('refreshToken')
+        return successResponse(res, {
+            statusCode: 200,
+            message: `LogOut is successful`,
+            payload: {}
+        })
+        
+    } catch (error) {
+        next(error);
+    }
+}
+
+const handleRefreshToken = async(req,res,next)=>{
+    try {
+        const oldRefreshToken = req.cookies.refreshToken;
+
+        const decodedToken = jwt.verify(oldRefreshToken, refreshKey)
+        console.log(decodedToken);
+
+        if(!decodedToken){
+            throw createError(401, 'Invalid Refresh Token')
+        }
+
+        const accessToken = createJsonWebToken(decodedToken.user, accessKey, 10 * 60 * 1000);
+
+        res.cookie('accessToken', accessToken,{
+            maxAge: 10 * 60 * 1000,
+            httpOnly: true,
+            secure: true,
+            sameSite: 'none',
+        })
+        return successResponse(res, {
+            statusCode: 200,
+            message: `New Access Token created successful`,
+            payload: {}
+        })
+        
+    } catch (error) {
+        next(error);
+    }
+}
+
+const handleProtectedRoute = async(req,res,next)=>{
+    try {
+        const accessToken = req.cookies.accessToken;
+
+        const decodedToken = jwt.verify(accessToken, accessKey)
+        console.log(decodedToken);
+
+        if(!decodedToken){
+            throw createError(401, 'Invalid access Token')
+        }
+        return successResponse(res, {
+            statusCode: 200,
+            message: `Protected route accessed successfully`,
+            payload: {}
+        })
+        
+    } catch (error) {
+        next(error);
+    }
+}
+
+module.exports = {handleLogin,handleLogOut,handleRefreshToken,handleProtectedRoute}
